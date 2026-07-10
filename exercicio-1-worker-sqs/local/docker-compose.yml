@@ -1,0 +1,10 @@
+services:
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.6.11
+    container_name: sqs-local
+    ports:
+      - "9324:9324"
+      - "9325:9325"
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf
+    command: ["-Dconfig.file=/opt/elasticmq.conf"]

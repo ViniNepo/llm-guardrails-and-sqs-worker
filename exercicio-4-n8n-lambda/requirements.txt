@@ -1,0 +1,6 @@
+# A demo local (python lambda_session_handler.py) roda em MODO SIMULADO APENAS
+# com a biblioteca padrão do Python 3.10+ — nenhuma instalação é necessária.
+#
+# O boto3 abaixo só é preciso para executar de fato contra a AWS (S3/SNS/Secrets).
+# Instale com:  pip install -r requirements.txt
+boto3>=1.34
