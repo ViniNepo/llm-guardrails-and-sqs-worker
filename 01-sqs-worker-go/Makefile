@@ -1,5 +1,5 @@
-# Makefile — atalhos para rodar o worker localmente.
-# Requer: Go 1.22+, e (para a fila local) Docker OU Java.
+# Makefile: shortcuts to run the worker locally.
+# Requires Go 1.22+ and, for the local queue, Docker or Java.
 
 SHELL := /bin/bash
 ENDPOINT ?= http://localhost:9324
@@ -15,40 +15,40 @@ export AWS_SECRET_ACCESS_KEY := local
 
 .PHONY: help deps build vet up up-jar down seed run demo clean
 
-help: ## Lista os comandos disponíveis
+help: ## List available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-deps: ## Baixa as dependências Go
+deps: ## Download Go dependencies
 	go mod tidy
 
-build: ## Compila o worker
+build: ## Build the worker
 	go build -o bin/worker .
 
-vet: ## Roda go vet
+vet: ## Run go vet
 	go vet ./...
 
-up: ## Sobe a fila SQS local via Docker (recomendado)
+up: ## Start the local SQS queue with Docker (recommended)
 	docker compose -f local/docker-compose.yml up -d
-	@echo "SQS local em $(ENDPOINT) (UI: http://localhost:9325)"
+	@echo "Local SQS at $(ENDPOINT) (UI: http://localhost:9325)"
 
-up-jar: ## Sobe a fila SQS local via Java (sem Docker)
+up-jar: ## Start the local SQS queue with Java (no Docker)
 	@test -f $(ELASTICMQ_JAR) || curl -sSL -o $(ELASTICMQ_JAR) \
 	  https://s3-eu-west-1.amazonaws.com/softwaremill-public/elasticmq-server-$(ELASTICMQ_VERSION).jar
 	java -Dconfig.file=local/elasticmq.conf -jar $(ELASTICMQ_JAR)
 
-down: ## Derruba a fila SQS local (Docker)
+down: ## Stop the local SQS queue (Docker)
 	docker compose -f local/docker-compose.yml down
 
-seed: ## Envia N_MESSAGES mensagens de teste (default 25)
+seed: ## Send N_MESSAGES test messages (default 25)
 	N_MESSAGES=$${N_MESSAGES:-25} go run ./local/producer
 
-run: ## Roda o worker (Ctrl+C para shutdown gracioso)
+run: ## Run the worker (Ctrl+C for a graceful shutdown)
 	NUM_WORKERS=$${NUM_WORKERS:-5} WAIT_TIME_SECONDS=$${WAIT_TIME_SECONDS:-1} go run .
 
-demo: ## Fluxo completo: injeta mensagens e roda o worker
+demo: ## Full flow: send messages, then run the worker
 	@$(MAKE) seed
 	@$(MAKE) run
 
-clean: ## Remove binários
+clean: ## Remove binaries
 	rm -rf bin

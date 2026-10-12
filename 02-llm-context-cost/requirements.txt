@@ -1,0 +1,6 @@
+# The local demo (python context_optimizer.py) runs with the Python 3.10+
+# standard library only; nothing needs to be installed.
+#
+# boto3 is only needed for real AWS mode (calling Bedrock).
+# Install with:  pip install -r requirements.txt
+boto3>=1.34

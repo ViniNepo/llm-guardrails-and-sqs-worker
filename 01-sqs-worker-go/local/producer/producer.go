@@ -65,7 +65,7 @@ func main() {
 		}
 		sent += len(out.Successful)
 	}
-	fmt.Printf("Enviadas %d mensagens para %s\n", sent, queueURL)
+	fmt.Printf("Sent %d messages to %s\n", sent, queueURL)
 }
 
 func getenv(k, def string) string {

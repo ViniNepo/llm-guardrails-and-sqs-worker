@@ -1,0 +1,59 @@
+{
+  "name": "Session Closed - Negative Sentiment",
+  "_comment": "Illustrative sketch of the N8n workflow. N8n ORCHESTRATES (trigger, routing, retry, DLQ); the business logic lives in the Lambda. The transcript reaches N8n ALREADY encrypted (item c).",
+  "nodes": [
+    {
+      "name": "Trigger - Session Closed (SQS/Webhook)",
+      "type": "n8n-nodes-base.awsSqsTrigger",
+      "notes": "Receives the session closed event. Could also be an EventBridge webhook. Payload has session_id, customer_id, sentiment, transcript_ciphertext (encrypted).",
+      "position": [200, 300]
+    },
+    {
+      "name": "IF - Negative Sentiment?",
+      "type": "n8n-nodes-base.if",
+      "notes": "Routes only when sentiment == 'negative'. Neutral/positive sentiment ends the flow at no cost.",
+      "parameters": {
+        "conditions": { "string": [{ "value1": "={{$json[\"sentiment\"]}}", "value2": "negative" }] }
+      },
+      "position": [440, 300]
+    },
+    {
+      "name": "Lambda - Session Handler",
+      "type": "n8n-nodes-base.awsLambda",
+      "notes": "Invokes lambda_session_handler.py SYNCHRONOUSLY. The Lambda runs the 3 side effects (S3, CRM, SNS), each idempotent. Retry: 3x with exponential backoff. Timeout aligned with the Lambda.",
+      "parameters": {
+        "function": "session-negative-handler",
+        "invocationType": "RequestResponse"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "position": [680, 260]
+    },
+    {
+      "name": "On Error - Send to DLQ",
+      "type": "n8n-nodes-base.awsSqs",
+      "notes": "If the Lambda still fails after the retries, publishes the event (with session_id) to an SQS DLQ for manual or automatic reprocessing. The event is never lost.",
+      "parameters": { "queue": "session-negative-dlq", "operation": "sendMessage" },
+      "position": [680, 440]
+    },
+    {
+      "name": "No-Op - End",
+      "type": "n8n-nodes-base.noOp",
+      "position": [680, 120]
+    }
+  ],
+  "connections": {
+    "Trigger - Session Closed (SQS/Webhook)": { "main": [[{ "node": "IF - Negative Sentiment?", "type": "main", "index": 0 }]] },
+    "IF - Negative Sentiment?": {
+      "main": [
+        [{ "node": "Lambda - Session Handler", "type": "main", "index": 0 }],
+        [{ "node": "No-Op - End", "type": "main", "index": 0 }]
+      ]
+    },
+    "Lambda - Session Handler": {
+      "main": [[]],
+      "error": [[{ "node": "On Error - Send to DLQ", "type": "main", "index": 0 }]]
+    }
+  }
+}

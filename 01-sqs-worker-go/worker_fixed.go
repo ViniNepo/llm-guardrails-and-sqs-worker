@@ -74,14 +74,14 @@ func main() {
 
 	awsCfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		slog.Error("falha ao carregar config AWS", "err", err)
+		slog.Error("failed to load AWS config", "err", err)
 		os.Exit(1)
 	}
 
 	client := sqs.NewFromConfig(awsCfg, func(o *sqs.Options) {
 		if cfg.EndpointURL != "" {
 			o.BaseEndpoint = aws.String(cfg.EndpointURL)
-			slog.Info("usando endpoint SQS customizado (modo local)", "endpoint", cfg.EndpointURL)
+			slog.Info("using custom SQS endpoint (local mode)", "endpoint", cfg.EndpointURL)
 		}
 	})
 
@@ -91,7 +91,7 @@ func main() {
 	w := &Worker{client: client, cfg: cfg}
 	w.Run(ctx)
 
-	slog.Info("worker finalizado com sucesso")
+	slog.Info("worker stopped cleanly")
 }
 
 func (w *Worker) Run(ctx context.Context) {
@@ -118,7 +118,7 @@ func (w *Worker) poll(ctx context.Context, out chan<- types.Message) {
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("sinal de shutdown recebido; parando de buscar mensagens")
+			slog.Info("shutdown signal received; no longer polling for messages")
 			return
 		default:
 		}
@@ -133,7 +133,7 @@ func (w *Worker) poll(ctx context.Context, out chan<- types.Message) {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			slog.Error("erro no ReceiveMessage", "err", err)
+			slog.Error("ReceiveMessage failed", "err", err)
 			if !backoff.Sleep(ctx) {
 				return
 			}
@@ -158,7 +158,7 @@ func (w *Worker) consume(id int, in <-chan types.Message) {
 		cancel()
 
 		if err != nil {
-			slog.Error("falha ao processar mensagem; será reentregue",
+			slog.Error("failed to process message; it will be redelivered",
 				"worker", id, "messageId", aws.ToString(msg.MessageId), "err", err)
 			continue
 		}
@@ -173,7 +173,7 @@ func (w *Worker) consume(id int, in <-chan types.Message) {
 		})
 		delCancel()
 		if delErr != nil {
-			slog.Error("falha ao apagar mensagem processada; risco de reprocessamento",
+			slog.Error("processed message could not be deleted; it may be processed again",
 				"worker", id, "messageId", aws.ToString(msg.MessageId), "err", delErr)
 		}
 	}
@@ -188,14 +188,14 @@ func handleMessage(ctx context.Context, body string) error {
 
 	var evt SessionEvent
 	if err := json.Unmarshal([]byte(body), &evt); err != nil {
-		return fmt.Errorf("payload inválido (não é JSON de SessionEvent): %w", err)
+		return fmt.Errorf("invalid payload (not a SessionEvent JSON): %w", err)
 	}
 
 	if evt.SessionID == "" || evt.CustomerID == "" {
-		return fmt.Errorf("evento sem session_id/customer_id: %q", body)
+		return fmt.Errorf("event missing session_id/customer_id: %q", body)
 	}
 
-	slog.Info("sessão processada",
+	slog.Info("session processed",
 		"session_id", evt.SessionID,
 		"customer_id", evt.CustomerID,
 		"sentiment", evt.Sentiment,
@@ -224,7 +224,7 @@ func (b *backoff) Reset() { b.cur = b.base }
 func mustEnv(k string) string {
 	v := os.Getenv(k)
 	if v == "" {
-		slog.Error("variável de ambiente obrigatória ausente", "var", k)
+		slog.Error("required environment variable is missing", "var", k)
 		os.Exit(1)
 	}
 	return v

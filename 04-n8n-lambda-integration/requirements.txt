@@ -1,0 +1,6 @@
+# The local demo (python lambda_session_handler.py) runs in SIMULATED MODE with
+# the Python 3.10+ standard library only; nothing needs to be installed.
+#
+# boto3 is only needed to actually run against AWS (S3/SNS/Secrets Manager).
+# Install with:  pip install -r requirements.txt
+boto3>=1.34

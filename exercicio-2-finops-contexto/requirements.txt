@@ -1,6 +1,0 @@
-# A demonstração local (python context_optimizer.py) roda APENAS com a
-# biblioteca padrão do Python 3.10+ — nenhuma instalação é necessária.
-#
-# O boto3 abaixo só é preciso para o modo AWS real (chamada ao Bedrock).
-# Instale com:  pip install -r requirements.txt
-boto3>=1.34

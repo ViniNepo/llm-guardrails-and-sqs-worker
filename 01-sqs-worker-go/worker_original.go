@@ -1,8 +1,8 @@
 // worker_original.go
 //
-// ⚠️ CÓDIGO PROBLEMÁTICO — mantido APENAS para referência/diagnóstico.
-// Não é compilado como parte do build (ver build tag abaixo) e não deve ser
-// usado. A versão corrigida está em worker_corrigido.go.
+// ORIGINAL (BUGGY) CODE, kept only as a reference for the diagnosis.
+// It is excluded from the build (see the build tag below) and must not be
+// used. The fixed version is in worker_fixed.go.
 //
 //go:build ignore
 // +build ignore
@@ -26,7 +26,7 @@ func processQueue(client *sqs.Client, queueURL string) {
 		for _, msg := range result.Messages {
 			err := handleMessage(*msg.Body)
 			if err != nil {
-				fmt.Println("erro:", err)
+				fmt.Println("error:", err)
 			}
 			client.DeleteMessage(context.Background(), &sqs.DeleteMessageInput{
 				QueueUrl:      &queueURL,
@@ -37,7 +37,7 @@ func processQueue(client *sqs.Client, queueURL string) {
 }
 
 func handleMessage(body string) error {
-	// processa evento de sessão encerrada
-	// chamada a banco de dados, enriquecimento e logging
+	// processes a "session closed" event:
+	// database call, enrichment and logging
 	return nil
 }

@@ -2,26 +2,26 @@
 lambda_session_handler.py
 =========================
 
-Lógica de negócio do fluxo "sessão encerrada com sentimento negativo"
-(Exercício 4). Concentra as chamadas a serviços AWS/externos em uma Lambda,
-deixando o N8n apenas como orquestrador (roteamento, retry, visibilidade).
+Business logic for the "session closed with negative sentiment" flow
+(Exercise 4). It concentrates the calls to AWS and external services in one
+Lambda, leaving N8n as the orchestrator only (routing, retry, visibility).
 
-Responsabilidades desta Lambda:
-  1. Criar ticket no CRM via API REST (idempotente por sessionId).
-  2. Publicar alerta no tópico SNS do time de risco.
-  3. Salvar o transcript no S3 com metadados estruturados.
+Responsibilities of this Lambda:
+  1. Create a ticket in the CRM through its REST API (idempotent by sessionId).
+  2. Publish an alert to the risk team's SNS topic.
+  3. Save the transcript to S3 with structured metadata.
 
-Princípios aplicados:
-  - IDEMPOTÊNCIA: usa `sessionId` como chave; releitura/reexecução não duplica
-    ticket nem objeto no S3 (checagem prévia / chave determinística).
-  - SEGREDO/CRIPTOGRAFIA: o transcript é criptografado (envelope encryption via
-    KMS) — nunca trafega em plaintext pelo N8n (ver item c do README).
-  - FAIL-FAST + retorno estruturado: erros retornam de forma que o N8n saiba
-    rotear para retry/DLQ.
+Principles applied:
+  - IDEMPOTENCY: `sessionId` is the key; re-reading or re-running never
+    duplicates the ticket or the S3 object (prior lookup / deterministic key).
+  - SECRETS/ENCRYPTION: the transcript is encrypted (envelope encryption with
+    KMS) and never travels through N8n in plaintext (see item c in the README).
+  - FAIL-FAST + structured result: errors are returned in a way that lets N8n
+    route them to retry/DLQ.
 
-Este arquivo é executável para demonstração (`python lambda_session_handler.py`):
-se boto3/credenciais não existirem, ele roda em MODO SIMULADO, imprimindo o que
-faria, para permitir validação da lógica sem AWS.
+This file runs as a demo (`python lambda_session_handler.py`): if boto3 or
+credentials are missing, it runs in SIMULATED MODE, printing what it would do,
+so the logic can be validated without AWS.
 """
 
 from __future__ import annotations
@@ -34,15 +34,15 @@ from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
-# Modelo de entrada
+# Input model
 # ---------------------------------------------------------------------------
 @dataclass
 class SessionEvent:
     session_id: str
     customer_id: str
-    sentiment: str          # esperado: "negative" para disparar o fluxo
+    sentiment: str          # expected: "negative" to trigger the flow
     sentiment_score: float
-    transcript_ciphertext: str  # transcript JÁ criptografado (base64) — ver item c
+    transcript_ciphertext: str  # transcript ALREADY encrypted (base64), see item c
     metadata: dict
 
     @staticmethod
@@ -58,7 +58,7 @@ class SessionEvent:
 
 
 # ---------------------------------------------------------------------------
-# Detecção de ambiente (real vs. simulado)
+# Environment detection (real vs. simulated)
 # ---------------------------------------------------------------------------
 def _aws_available() -> bool:
     try:
@@ -69,20 +69,20 @@ def _aws_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 1) CRM — criação idempotente de ticket
+# 1) CRM: idempotent ticket creation
 # ---------------------------------------------------------------------------
 def create_crm_ticket(evt: SessionEvent) -> dict:
-    """Cria (ou reaproveita) um ticket no CRM.
+    """Creates (or reuses) a ticket in the CRM.
 
-    Idempotência: enviamos um `Idempotency-Key = session_id`. Se a API do CRM
-    suportar, ela retorna o ticket existente em vez de criar outro. Caso não
-    suporte, uma consulta prévia por `session_id` faz o mesmo papel.
+    Idempotency: we send an `Idempotency-Key = session_id`. If the CRM API
+    supports it, it returns the existing ticket instead of creating another.
+    If it does not, a prior lookup by `session_id` does the same job.
     """
     payload = {
-        "external_id": evt.session_id,   # chave natural para dedup no CRM
+        "external_id": evt.session_id,   # natural key for dedup in the CRM
         "customer_id": evt.customer_id,
         "priority": "high" if evt.sentiment_score <= -0.7 else "normal",
-        "subject": "Sessão encerrada com sentimento negativo",
+        "subject": "Session closed with negative sentiment",
         "tags": ["chatbot", "sentiment-negative"],
     }
     headers = {
@@ -107,7 +107,7 @@ def create_crm_ticket(evt: SessionEvent) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 2) SNS — alerta ao time de risco
+# 2) SNS: alert to the risk team
 # ---------------------------------------------------------------------------
 def publish_risk_alert(evt: SessionEvent, ticket: dict) -> dict:
     message = {
@@ -122,23 +122,23 @@ def publish_risk_alert(evt: SessionEvent, ticket: dict) -> dict:
     import boto3
 
     sns = boto3.client("sns")
-    # MessageDeduplicationId (se o tópico for FIFO) reforça idempotência.
+    # MessageDeduplicationId (if the topic is FIFO) reinforces idempotency.
     return sns.publish(
         TopicArn=os.environ["RISK_ALERT_TOPIC_ARN"],
-        Subject="Alerta: sessão com sentimento negativo",
+        Subject="Alert: session with negative sentiment",
         Message=json.dumps(message),
     )
 
 
 # ---------------------------------------------------------------------------
-# 3) S3 — persistência do transcript (criptografado) com metadados
+# 3) S3: store the (encrypted) transcript with metadata
 # ---------------------------------------------------------------------------
 def save_transcript(evt: SessionEvent) -> dict:
-    """Salva o transcript no S3 com chave DETERMINÍSTICA (idempotência).
+    """Saves the transcript to S3 under a DETERMINISTIC key (idempotency).
 
-    O corpo é o ciphertext recebido; o bucket ainda usa SSE-KMS (dupla proteção).
-    A chave é baseada no session_id, então reexecutar sobrescreve o mesmo objeto
-    em vez de criar duplicatas.
+    The body is the ciphertext received; the bucket also uses SSE-KMS (double
+    protection). The key is based on the session_id, so a re-run overwrites the
+    same object instead of creating duplicates.
     """
     key = f"transcripts/{_partition(evt.session_id)}/{evt.session_id}.json.enc"
     body = base64.b64decode(evt.transcript_ciphertext) if evt.transcript_ciphertext else b""
@@ -167,16 +167,16 @@ def save_transcript(evt: SessionEvent) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Utilitários
+# Utilities
 # ---------------------------------------------------------------------------
 def _partition(session_id: str) -> str:
-    """Prefixo de partição para não criar hotspot no S3."""
+    """Partition prefix to avoid an S3 hotspot."""
     h = hashlib.sha256(session_id.encode()).hexdigest()[:2]
     return h
 
 
 def _get_secret(name: str) -> str:
-    """Lê segredo do Secrets Manager (ou env em modo simulado)."""
+    """Reads a secret from Secrets Manager (or env in simulated mode)."""
     if not _aws_available():
         return os.getenv(name, "SIMULATED_SECRET")
     import boto3
@@ -191,13 +191,13 @@ def _get_secret(name: str) -> str:
 def lambda_handler(event: dict, context=None) -> dict:
     evt = SessionEvent.from_event(event)
 
-    # Guarda de negócio: só age em sentimento negativo (defesa extra além do N8n).
+    # Business guard: only act on negative sentiment (extra defense beyond N8n).
     if evt.sentiment != "negative":
         return {"statusCode": 200, "skipped": True, "reason": "sentiment != negative"}
 
-    # A ordem importa: persistir o transcript e criar o ticket ANTES de alertar,
-    # para que o alerta já carregue o ticket_id. Cada passo é idempotente, então
-    # um retry do N8n reexecuta com segurança.
+    # Order matters: store the transcript and create the ticket BEFORE alerting,
+    # so the alert already carries the ticket_id. Every step is idempotent, so
+    # an N8n retry re-runs safely.
     result = {"session_id": evt.session_id}
     try:
         result["transcript"] = save_transcript(evt)
@@ -205,15 +205,15 @@ def lambda_handler(event: dict, context=None) -> dict:
         result["alert"] = publish_risk_alert(evt, result["ticket"])
         result["statusCode"] = 200
     except Exception as e:
-        # Retorno estruturado para o N8n rotear a retry/DLQ.
+        # Structured result so N8n can route to retry/DLQ.
         result["statusCode"] = 500
         result["error"] = str(e)
-        raise  # relança para o N8n/Lambda marcar como falha
+        raise  # re-raise so N8n/Lambda mark it as failed
     return result
 
 
 # ---------------------------------------------------------------------------
-# Demonstração local
+# Local demo
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     sample = {
@@ -222,8 +222,8 @@ if __name__ == "__main__":
         "sentiment": "negative",
         "sentiment_score": -0.82,
         "transcript_ciphertext": base64.b64encode(b'{"turns":["..."]}').decode(),
-        "metadata": {"channel": "app", "produto": "cartao"},
+        "metadata": {"channel": "app", "product": "card"},
     }
-    print("=== Lambda session handler (modo simulado) ===\n")
+    print("=== Lambda session handler (simulated mode) ===\n")
     out = lambda_handler(sample)
     print(json.dumps(out, indent=2, ensure_ascii=False, default=str))

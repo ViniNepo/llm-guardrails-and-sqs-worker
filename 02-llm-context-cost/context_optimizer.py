@@ -2,23 +2,23 @@
 context_optimizer.py
 ====================
 
-Demonstração executável da estratégia de redução de custo por sessão do
-Exercício 2. Monta o payload enviado ao modelo (AWS Bedrock / Claude) aplicando:
+Runnable demo of the cost-per-session reduction strategy from Exercise 2.
+It builds the payload sent to the model (AWS Bedrock / Claude) by applying:
 
-  1. System prompt enxuto (carregado de system_prompt_otimizado.txt)
-  2. RAG: injeta APENAS as políticas relevantes à mensagem atual
-     (aqui, um "retriever" simulado por palavras-chave; em produção seria uma
-     busca vetorial em OpenSearch/Kendra/pgvector).
-  3. Sliding window: mantém só os últimos N turnos completos.
-  4. Sumarização: turnos mais antigos viram um resumo curto (stub — em produção,
-     uma chamada barata a um modelo menor, ex. Claude Haiku).
-  5. Orçamento de tokens (token budget): corta o histórico até caber no limite.
+  1. A lean system prompt (loaded from system_prompt_optimized.txt)
+  2. RAG: injects ONLY the policies relevant to the current message
+     (here a keyword-based "retriever" stands in; in production it would be a
+     vector search on OpenSearch/Kendra/pgvector).
+  3. Sliding window: keeps only the last N complete turns.
+  4. Summarization: older turns become a short summary (stubbed here; in
+     production, a cheap call to a smaller model such as Claude Haiku).
+  5. Token budget: trims the history until it fits under the limit.
 
-O objetivo é mostrar a mecânica e permitir medir a redução de tokens antes/depois.
-Não requer credenciais AWS: a chamada ao Bedrock é encapsulada e só roda se
-boto3 + credenciais estiverem presentes (ver `build_and_estimate`).
+The goal is to show the mechanics and measure the token reduction before and
+after. No AWS credentials are needed: the Bedrock call is wrapped and only runs
+when boto3 and credentials are available (see `invoke_bedrock`).
 
-Execução:
+Run:
     python context_optimizer.py
 """
 
@@ -31,12 +31,12 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# Estimativa de tokens
+# Token estimation
 # ---------------------------------------------------------------------------
-# Em produção, use o tokenizer do provedor (ex.: contagem retornada pela API do
-# Bedrock, ou `anthropic.count_tokens`). Aqui usamos a heurística amplamente
-# aceita de ~4 caracteres por token para texto em pt/en — suficiente para
-# raciocínio de custo e para os testes deste exercício.
+# In production, use the provider's tokenizer (e.g. the token counts returned
+# by the Bedrock API, or `anthropic.count_tokens`). Here we use the common
+# ~4 characters per token heuristic, which is enough to reason about cost and
+# for this exercise's comparison.
 def estimate_tokens(text: str) -> int:
     return math.ceil(len(text) / 4)
 
@@ -51,46 +51,47 @@ class Turn:
 
 
 # ---------------------------------------------------------------------------
-# 1) System prompt otimizado
+# 1) Optimized system prompt
 # ---------------------------------------------------------------------------
 def load_system_prompt() -> str:
-    path = Path(__file__).parent / "system_prompt_otimizado.txt"
+    path = Path(__file__).parent / "system_prompt_optimized.txt"
     return path.read_text(encoding="utf-8").strip()
 
 
 # ---------------------------------------------------------------------------
-# 2) RAG — recupera só as políticas relevantes à pergunta atual
+# 2) RAG: retrieve only the policies relevant to the current question
 # ---------------------------------------------------------------------------
-# Base de conhecimento (trecho ilustrativo). Em produção viveria fora do prompt,
-# indexada em um vector store, e cada item seria um chunk recuperável.
+# Knowledge base (illustrative excerpt). In production it would live outside
+# the prompt, indexed in a vector store, with each entry as a retrievable chunk.
 KNOWLEDGE_BASE = {
-    "contestacao": (
-        "Política de contestação de cobrança: o prazo para contestar é de 60 "
-        "dias a partir da data da cobrança. Contestações fora do prazo exigem "
-        "análise manual pelo time de atendimento."
+    "dispute": (
+        "Charge dispute policy: customers can dispute a charge within 60 days "
+        "of the charge date. Disputes filed after that require a manual review "
+        "by the support team."
     ),
-    "reembolso": (
-        "Política de reembolso: reembolsos aprovados são creditados em até 10 "
-        "dias úteis no mesmo meio de pagamento."
+    "refund": (
+        "Refund policy: approved refunds are credited within 10 business days "
+        "to the original payment method."
     ),
-    "saldo": (
-        "Consulta de saldo: o saldo disponível reflete transações liquidadas; "
-        "valores em processamento aparecem como 'pendentes'."
+    "balance": (
+        "Balance inquiry: the available balance reflects settled transactions; "
+        "amounts still processing show up as 'pending'."
     ),
 }
 
 
 def retrieve_policies(user_message: str, top_k: int = 1) -> list[str]:
-    """Retriever simulado por palavras-chave.
+    """Keyword-based stand-in for a retriever.
 
-    Substitua por busca vetorial real (embeddings + similaridade de cosseno).
-    Retorna só os chunks relevantes, evitando despejar as 80 regras no prompt.
+    Replace with a real vector search (embeddings + cosine similarity).
+    Returns only the relevant chunks instead of dumping all 80 rules into the
+    prompt.
     """
     msg = user_message.lower()
     keywords = {
-        "contestacao": ["contest", "cobran", "prazo"],
-        "reembolso": ["reembols", "estorn", "devolu"],
-        "saldo": ["saldo", "extrato"],
+        "dispute": ["disput", "charge", "deadline"],
+        "refund": ["refund", "chargeback", "money back"],
+        "balance": ["balance", "statement"],
     }
     scored: list[tuple[int, str]] = []
     for key, kws in keywords.items():
@@ -102,28 +103,27 @@ def retrieve_policies(user_message: str, top_k: int = 1) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# 3) + 4) Sliding window + sumarização do histórico antigo
+# 3) + 4) Sliding window + summary of the older history
 # ---------------------------------------------------------------------------
 def summarize_old_turns(old_turns: list[Turn]) -> str:
-    """Stub de sumarização.
+    """Summarization stub.
 
-    Em produção: uma chamada barata a um modelo pequeno (ex. Claude Haiku) para
-    condensar os turnos antigos em 1-2 frases com os fatos relevantes
-    (identidade, produto discutido, decisões). Aqui apenas concatenamos os
-    pedidos do usuário de forma comprimida para a demonstração ser executável
-    sem rede.
+    In production: a cheap call to a small model (e.g. Claude Haiku) that
+    condenses the older turns into 1-2 sentences with the facts that matter
+    (identity, product discussed, decisions). Here we just join the user's
+    requests in compressed form so the demo runs without network access.
     """
     if not old_turns:
         return ""
     user_points = [t.content for t in old_turns if t.role == "user"]
     joined = "; ".join(user_points)
-    return f"Resumo da conversa anterior (assuntos do cliente): {joined}."
+    return f"Summary of the earlier conversation (customer topics): {joined}."
 
 
 def apply_sliding_window(
     history: list[Turn], keep_last: int
 ) -> tuple[list[Turn], str]:
-    """Mantém os últimos `keep_last` turnos e resume o restante."""
+    """Keeps the last `keep_last` turns and summarizes the rest."""
     if len(history) <= keep_last:
         return history, ""
     old = history[:-keep_last]
@@ -132,12 +132,12 @@ def apply_sliding_window(
 
 
 # ---------------------------------------------------------------------------
-# 5) Orçamento de tokens — garante que o payload cabe no limite
+# 5) Token budget: make sure the payload fits under the limit
 # ---------------------------------------------------------------------------
 @dataclass
 class OptimizerConfig:
     keep_last_turns: int = 4          # sliding window
-    max_context_tokens: int = 1500    # teto do payload (fora a resposta)
+    max_context_tokens: int = 1500    # payload ceiling (excluding the answer)
     rag_top_k: int = 1
 
 
@@ -158,12 +158,12 @@ class BuiltContext:
         )
 
     def as_messages(self) -> list[dict]:
-        """Formato de mensagens estilo Bedrock/Anthropic."""
+        """Bedrock/Anthropic-style messages."""
         ctx_block = "\n".join(self.retrieved)
         if self.summary:
             ctx_block = f"{self.summary}\n{ctx_block}"
         return [
-            {"role": "user", "content": f"[CONTEXTO]\n{ctx_block}"},
+            {"role": "user", "content": f"[CONTEXT]\n{ctx_block}"},
             *[{"role": t.role, "content": t.content} for t in self.turns],
         ]
 
@@ -179,7 +179,7 @@ def build_optimized_context(
 
     built = BuiltContext(system_prompt, summary, retrieved, turns)
 
-    # Se ainda estourar o orçamento, encolhe a janela progressivamente.
+    # If it still exceeds the budget, shrink the window step by step.
     while built.total_tokens > cfg.max_context_tokens and len(turns) > 1:
         dropped = turns[0]
         turns = turns[1:]
@@ -190,24 +190,24 @@ def build_optimized_context(
 
 
 # ---------------------------------------------------------------------------
-# Baseline (payload ATUAL, sem otimização) para comparação
+# Baseline (CURRENT payload, no optimization) for comparison
 # ---------------------------------------------------------------------------
-BLOATED_SYSTEM_PROMPT = "Você é um assistente financeiro da empresa X. Regras: " + " ".join(
-    f"Regra {i}: texto extenso descrevendo uma política de negócio detalhada." for i in range(1, 81)
+BLOATED_SYSTEM_PROMPT = "You are a financial assistant for Company X. Rules: " + " ".join(
+    f"Rule {i}: long text describing a detailed business policy." for i in range(1, 81)
 )
 
 
 def build_baseline_context(history: list[Turn], user_message: str) -> BuiltContext:
-    """Reproduz o payload inchado descrito no enunciado (~3.200 tokens):
-    system prompt gigante + histórico completo (até 40 turnos)."""
+    """Reproduces the bloated payload described in the brief (~3,200 tokens):
+    a huge system prompt + the full history (up to 40 turns)."""
     full_history = history + [Turn("user", user_message)]
-    # Sem RAG e sem window: tudo entra.
+    # No RAG and no window: everything goes in.
     b = BuiltContext(BLOATED_SYSTEM_PROMPT, "", [], full_history)
     return b
 
 
 # ---------------------------------------------------------------------------
-# (Opcional) chamada real ao Bedrock — só roda se boto3+credenciais existirem
+# (Optional) real Bedrock call: only runs when boto3 + credentials exist
 # ---------------------------------------------------------------------------
 def invoke_bedrock(messages: list[dict], system_prompt: str) -> str | None:
     try:
@@ -234,37 +234,37 @@ def invoke_bedrock(messages: list[dict], system_prompt: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Demonstração
+# Demo
 # ---------------------------------------------------------------------------
 def _demo():
-    # Simula uma sessão longa (40 turnos, como no enunciado).
+    # Simulates a long session (40 turns, as in the brief).
     history: list[Turn] = []
     for i in range(20):
-        history.append(Turn("user", f"pergunta genérica número {i} do cliente"))
-        history.append(Turn("assistant", f"resposta genérica número {i}"))
+        history.append(Turn("user", f"generic customer question number {i}"))
+        history.append(Turn("assistant", f"generic answer number {i}"))
 
-    user_message = "qual o prazo para contestar uma cobrança?"
+    user_message = "what is the deadline to dispute a charge?"
 
     baseline = build_baseline_context(history, user_message)
     optimized = build_optimized_context(history, user_message, OptimizerConfig())
 
-    print("=== FinOps: comparação de tokens por sessão ===\n")
-    print(f"Baseline  (atual): {baseline.total_tokens:>5} tokens")
-    print(f"Otimizado (novo) : {optimized.total_tokens:>5} tokens")
-    reducao = 100 * (1 - optimized.total_tokens / baseline.total_tokens)
-    print(f"Redução          : {reducao:>5.1f}%\n")
+    print("=== FinOps: tokens per session ===\n")
+    print(f"Baseline  (current): {baseline.total_tokens:>5} tokens")
+    print(f"Optimized (new)    : {optimized.total_tokens:>5} tokens")
+    reduction = 100 * (1 - optimized.total_tokens / baseline.total_tokens)
+    print(f"Reduction          : {reduction:>5.1f}%\n")
 
-    print("Políticas recuperadas via RAG:")
+    print("Policies retrieved via RAG:")
     for c in optimized.retrieved:
         print(f"  - {c[:80]}...")
-    print(f"\nTurnos mantidos (sliding window): {len(optimized.turns)}")
-    print(f"Resumo do histórico antigo: {optimized.summary[:80]}...")
+    print(f"\nTurns kept (sliding window): {len(optimized.turns)}")
+    print(f"Summary of the older history: {optimized.summary[:80]}...")
 
     answer = invoke_bedrock(optimized.as_messages(), optimized.system_prompt)
     if answer:
-        print(f"\nResposta do Bedrock:\n{answer}")
+        print(f"\nBedrock answer:\n{answer}")
     else:
-        print("\n(Chamada ao Bedrock ignorada: boto3/credenciais ausentes.)")
+        print("\n(Bedrock call skipped: boto3/credentials not available.)")
 
 
 if __name__ == "__main__":

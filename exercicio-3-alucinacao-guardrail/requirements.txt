@@ -1,6 +1,0 @@
-# Os testes locais (python guardrail_lambda.py) rodam APENAS com a biblioteca
-# padrão do Python 3.10+ — nenhuma instalação é necessária.
-#
-# O boto3 abaixo só é preciso para emitir métricas no CloudWatch (modo AWS real).
-# Instale com:  pip install -r requirements.txt
-boto3>=1.34
